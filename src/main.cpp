@@ -328,18 +328,47 @@ int main(int, char**)
 		return 1;
 	}
 
-	// SDL 负责原生窗口、事件、音频播放和最终的 2D 绘制。
-	SDL_Window* win = SDL_CreateWindow("Audio Visualizer", 1280, 720,
-		SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+	// SDL 负责原生窗口、事件、音频播放和最终的 2D 绘制。根据当前显示器的
+	// 可用区域选择初始尺寸，避免在低分辨率/缩放显示器上创建一个超出屏幕的窗口。
+	int initialWidth = 1280;
+	int initialHeight = 720;
+	SDL_Rect displayBounds{};
+	if (SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &displayBounds)) {
+		initialWidth = std::clamp(displayBounds.w - 40, 640, initialWidth);
+		initialHeight = std::clamp(displayBounds.h - 80, 360, initialHeight);
+	}
+	SDL_Window* win = SDL_CreateWindow("Audio Visualizer", initialWidth, initialHeight,
+		// 使用逻辑分辨率作为渲染目标，避免 Retina/高 DPI 下 drawable
+		// 自动变成窗口尺寸的 2 倍，导致布局和实际绘制区域不一致。
+		SDL_WINDOW_RESIZABLE);
+	if (!win) {
+		SDL_Log("window creation failed: %s", SDL_GetError());
+		SDL_SetLogOutputFunction(appLog.forward, appLog.forwardUserdata);
+		SDL_Quit();
+		return 1;
+	}
+	SDL_SetWindowMinimumSize(win, 480, 320);
 	SDL_Renderer* ren = SDL_CreateRenderer(win, nullptr);
+	if (!ren) {
+		SDL_Log("renderer creation failed: %s", SDL_GetError());
+		SDL_DestroyWindow(win);
+		SDL_SetLogOutputFunction(appLog.forward, appLog.forwardUserdata);
+		SDL_Quit();
+		return 1;
+	}
 
 	// ImGui 本身只生成界面顶点；下面两个 backend 分别连接 SDL 事件和 SDL Renderer。
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO();
 	LoadChineseFont(io);
+	// 默认字号对高分辨率窗口显得过小。字体和控件一起放大，保证文字、按钮
+	// 与频谱面板在 1280x720 及更大窗口中都具有可读尺寸。
+	ImGui::GetStyle().ScaleAllSizes(1.0f);
+	ImGui::GetStyle().FontScaleMain = 1.0f;
 	ImGui_ImplSDL3_InitForSDLRenderer(win, ren);
 	ImGui_ImplSDLRenderer3_Init(ren);
 	ImGui::StyleColorsDark();
+	const ImGuiStyle baseStyle = ImGui::GetStyle();
 
 	// WAV 模式由 SDL stream 播放；实时模式由 LoopbackCapture 采集。
 	// 任一时刻界面只启用其中一个来源。
@@ -351,6 +380,8 @@ int main(int, char**)
 	int sourceMode = 0; // ImGui Combo 使用整数索引：0=WAV，1=实时系统输出。
 	bool limitFps = true;
 	int targetFps = 60;
+	int lastLoggedWindowW = 0, lastLoggedWindowH = 0;
+	int lastLoggedDrawableW = 0, lastLoggedDrawableH = 0;
 	SDL_Log("VisibleAudio started");
 
 	bool run = true;
@@ -372,13 +403,47 @@ int main(int, char**)
 		ImGui_ImplSDL3_NewFrame();
 		ImGui::NewFrame();
 
-		// WorkPos/WorkSize 是当前可用客户区；窗口缩放后布局会自动跟随。
+		// 主视口的 Pos/Size 是当前窗口完整客户区；窗口缩放后布局会自动跟随。
 		ImGuiViewport* viewport = ImGui::GetMainViewport();
-		const ImVec2 workPos = viewport->WorkPos;
-		const ImVec2 workSize = viewport->WorkSize;
-		const float controlHeight = std::min(140.0f, workSize.y);
-		const float fpsPanelWidth = std::min(300.0f, workSize.x * 0.32f);
-		const float controlWidth = std::max(1.0f, workSize.x - fpsPanelWidth);
+		int windowW = 0, windowH = 0;
+		int drawableW = 0, drawableH = 0;
+		SDL_GetWindowSize(win, &windowW, &windowH);
+		SDL_GetWindowSizeInPixels(win, &drawableW, &drawableH);
+		// ImGui 的 viewport 在部分高 DPI 后端返回的是绘制像素尺寸，而窗口
+		// 布局使用逻辑尺寸。SDL_GetWindowSize 始终返回当前客户区逻辑尺寸，
+		// 用它计算面板可避免内容只占窗口一部分或超出窗口边界。
+		const ImVec2 workPos(0.0f, 0.0f);
+		const ImVec2 workSize((float)std::max(1, windowW), (float)std::max(1, windowH));
+		const bool layoutSizeChanged = windowW != lastLoggedWindowW || windowH != lastLoggedWindowH ||
+			drawableW != lastLoggedDrawableW || drawableH != lastLoggedDrawableH;
+		if (layoutSizeChanged) {
+			SDL_Log("layout sizes: window=%dx%d drawable=%dx%d imgui_display=%.0fx%.0f viewport=%.0f,%.0f %.0fx%.0f",
+				windowW, windowH, drawableW, drawableH, io.DisplaySize.x, io.DisplaySize.y,
+				viewport->Pos.x, viewport->Pos.y, viewport->Size.x, viewport->Size.y);
+			lastLoggedWindowW = windowW;
+			lastLoggedWindowH = windowH;
+			lastLoggedDrawableW = drawableW;
+			lastLoggedDrawableH = drawableH;
+		}
+		// 随窗口高度调整字体和控件比例，避免 4K 窗口文字过小、低分辨率窗口
+		// 又因控件过大而被截断。样式以启动时的基准副本重新计算，避免逐帧累乘。
+		const float resolutionScale = std::clamp(workSize.y / 720.0f, 0.80f, 1.50f);
+		ImGui::GetStyle() = baseStyle;
+		ImGui::GetStyle().ScaleAllSizes(resolutionScale);
+		ImGui::GetStyle().FontScaleMain = 1.10f * resolutionScale;
+		// 窄窗口改为竖排，给输入框和按钮保留足够宽度；宽窗口继续使用横排。
+		// 所有尺寸都来自当前客户区，因此拖动窗口或改变 DPI 后下一帧即可重排。
+		const bool compactLayout = workSize.x < 760.0f;
+		const float fpsPanelWidth = compactLayout ? workSize.x
+			: std::min(300.0f, workSize.x * 0.32f);
+		const float controlWidth = compactLayout ? workSize.x
+			: std::max(1.0f, workSize.x - fpsPanelWidth);
+		const float controlHeight = compactLayout
+			? std::min(150.0f, std::max(112.0f, workSize.y * 0.20f))
+			: std::min(140.0f, std::max(96.0f, workSize.y * 0.30f));
+		const float fpsHeight = compactLayout
+			? std::min(120.0f, std::max(96.0f, workSize.y * 0.16f))
+			: controlHeight;
 		// 三个面板由程序固定布局，不允许用户拖动或把错误尺寸保存进 imgui.ini。
 		constexpr ImGuiWindowFlags panelFlags = ImGuiWindowFlags_NoMove |
 			ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
@@ -439,11 +504,16 @@ int main(int, char**)
 			ImGui::SameLine();
 			ImGui::TextUnformatted(loopback.IsRunning() ? "Capturing" : "Stopped");
 		}
+		if (layoutSizeChanged)
+			SDL_Log("panel Control actual: pos=%.0f,%.0f size=%.0fx%.0f",
+				ImGui::GetWindowPos().x, ImGui::GetWindowPos().y,
+				ImGui::GetWindowSize().x, ImGui::GetWindowSize().y);
 		ImGui::End();
 
-		// 右上：FPS 限制面板。
-		ImGui::SetNextWindowPos(ImVec2(workPos.x + controlWidth, workPos.y));
-		ImGui::SetNextWindowSize(ImVec2(fpsPanelWidth, controlHeight));
+		// FPS 限制面板：宽窗口位于右上，窄窗口自动移到控制面板下方。
+		const float fpsY = compactLayout ? workPos.y + controlHeight : workPos.y;
+		ImGui::SetNextWindowPos(ImVec2(compactLayout ? workPos.x : workPos.x + controlWidth, fpsY));
+		ImGui::SetNextWindowSize(ImVec2(fpsPanelWidth, fpsHeight));
 		ImGui::Begin("FPS Limit", nullptr, panelFlags);
 		if (ImGui::Checkbox("Enabled", &limitFps))
 			SDL_Log("FPS limit %s", limitFps ? "enabled" : "disabled");
@@ -455,12 +525,28 @@ int main(int, char**)
 			SDL_Log("FPS target set to %d", targetFps);
 		ImGui::EndDisabled();
 		ImGui::Text("Actual: %.1f FPS", io.Framerate);
+		if (layoutSizeChanged)
+			SDL_Log("panel FPS actual: pos=%.0f,%.0f size=%.0fx%.0f",
+				ImGui::GetWindowPos().x, ImGui::GetWindowPos().y,
+				ImGui::GetWindowSize().x, ImGui::GetWindowSize().y);
 		ImGui::End();
 
-		// 下方：频谱画布，占用剩余全部空间。
-		ImGui::SetNextWindowPos(ImVec2(workPos.x, workPos.y + controlHeight));
-		ImGui::SetNextWindowSize(ImVec2(workSize.x, std::max(1.0f, workSize.y - controlHeight)));
+		// 频谱画布占用剩余全部空间。
+		const float spectrumY = compactLayout ? fpsY + fpsHeight : workPos.y + controlHeight;
+		if (layoutSizeChanged) {
+			SDL_Log("layout panels: compact=%s control=%.0fx%.0f fps=%.0fx%.0f spectrum_y=%.0f spectrum_h=%.0f scale=%.2f",
+				compactLayout ? "yes" : "no", controlWidth, controlHeight,
+				fpsPanelWidth, fpsHeight, spectrumY,
+				workPos.y + workSize.y - spectrumY, resolutionScale);
+		}
+		ImGui::SetNextWindowPos(ImVec2(workPos.x, spectrumY));
+		ImGui::SetNextWindowSize(ImVec2(workSize.x,
+			std::max(1.0f, workPos.y + workSize.y - spectrumY)));
 		ImGui::Begin("Spectrum", nullptr, panelFlags);
+		if (layoutSizeChanged)
+			SDL_Log("panel Spectrum actual: pos=%.0f,%.0f size=%.0fx%.0f",
+				ImGui::GetWindowPos().x, ImGui::GetWindowPos().y,
+				ImGui::GetWindowSize().x, ImGui::GetWindowSize().y);
 		ImVec2 cv = ImGui::GetContentRegionAvail();
 		ImDrawList* d = ImGui::GetWindowDrawList();
 		ImVec2 p0 = ImGui::GetCursorScreenPos();
