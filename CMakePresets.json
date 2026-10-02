@@ -8,8 +8,7 @@
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/extern/vcpkg/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed-static",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },

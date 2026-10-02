@@ -3,7 +3,18 @@
   "version": "0.1.0",
   "dependencies": [
     "sdl3",
-    "kissfft"
+    "kissfft",
+    {
+      "name": "rtaudio",
+      "platform": "!linux"
+    },
+    {
+      "name": "rtaudio",
+      "features": [
+        "pulse"
+      ],
+      "platform": "linux"
+    }
   ],
   "builtin-baseline": "2c88ca199b27256e4c7d9f796216f82f2b976b0e"
 }
