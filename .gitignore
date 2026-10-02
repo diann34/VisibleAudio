@@ -70,3 +70,4 @@ Testing/
 extern/vcpkg/buildtrees/
 extern/vcpkg/packages/
 extern/vcpkg/downloads/
+/.vs
