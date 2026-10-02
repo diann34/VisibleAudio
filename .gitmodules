@@ -1,0 +1,6 @@
+[submodule "extern/vcpkg"]
+	path = extern/vcpkg
+	url = git@github.com:microsoft/vcpkg.git
+[submodule "extern/imgui"]
+	path = extern/imgui
+	url = git@github.com:ocornut/imgui.git
