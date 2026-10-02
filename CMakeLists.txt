@@ -24,9 +24,9 @@ target_compile_definitions(imgui_lib PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
 
 # ---- 主程序 ----
 add_executable(VisibleAudio WIN32 src/main.cpp)
-target_link_libraries(VisibleAudio PRIVATE SDL3::SDL3 imgui_lib kissfft::kissfft)
+target_link_libraries(VisibleAudio PRIVATE SDL3::SDL3 imgui_lib kissfft::kissfft-float)
 target_compile_options(VisibleAudio PRIVATE /W4 /utf-8)
 
 # 把 SDL3.dll 拷到 exe 旁边
-add_custom_command(TARGET audio_viz POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_FILE:SDL3::SDL3> $<TARGET_FILE_DIR:audio_viz>)
+add_custom_command(TARGET VisibleAudio POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:SDL3::SDL3> $<TARGET_FILE_DIR:VisibleAudio>)

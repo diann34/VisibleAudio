@@ -1,5 +1,5 @@
 {
-  "name": "VisibleAudio",
+  "name": "visibleaudio",
   "version": "0.1.0",
   "dependencies": [
     "sdl3",
