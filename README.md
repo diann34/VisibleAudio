@@ -1,4 +1,5 @@
 # VisibleAudio
+注：纯Vibe Coding项目
 
 VisibleAudio 是一个适合学习 C++ 音频编程的小型频谱可视化项目。它可以播放 WAV 文件，也可以实时采集系统正在播放的声音，然后用 FFT（快速傅里叶变换）把声音画成 80 根频谱柱。
 
