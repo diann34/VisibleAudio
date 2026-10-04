@@ -267,6 +267,21 @@ static void ComputeFFT(Vis& v)
 	}
 }
 
+// 根据用户选择的基础色和柱高生成柱子的实际颜色。只调整 HSV 的亮度，
+// 因此用户选定的色相/饱和度在不同音量下仍保持一致。
+static ImU32 BarColorForMagnitude(const ImVec4& baseColor, float magnitude,
+	float hueOffset)
+{
+	float h = 0.0f, s = 0.0f, value = 0.0f;
+	ImGui::ColorConvertRGBtoHSV(baseColor.x, baseColor.y, baseColor.z, h, s, value);
+	h = fmodf(h + hueOffset, 1.0f);
+	if (h < 0.0f) h += 1.0f;
+	const float brightness = 0.20f + std::clamp(magnitude, 0.0f, 1.0f) * 0.80f;
+	float r = 0.0f, g = 0.0f, b = 0.0f;
+	ImGui::ColorConvertHSVtoRGB(h, s, value * brightness, r, g, b);
+	return ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, baseColor.w));
+}
+
 // 读取整个 WAV、创建 SDL 播放流，并把 post-mix 回调接到同一个 Vis 缓冲。
 static bool LoadAndPlay(const char* path, SDL_AudioDeviceID& dev,
 	SDL_AudioStream*& stream, Vis& vis)
@@ -380,6 +395,9 @@ int main(int, char**)
 	int sourceMode = 0; // ImGui Combo 使用整数索引：0=WAV，1=实时系统输出。
 	bool limitFps = true;
 	int targetFps = 60;
+	ImVec4 barColor(0.20f, 0.65f, 1.00f, 1.00f);
+	bool animateThemeColor = false;
+	bool movingBarGradient = false;
 	int lastLoggedWindowW = 0, lastLoggedWindowH = 0;
 	int lastLoggedDrawableW = 0, lastLoggedDrawableH = 0;
 	SDL_Log("VisibleAudio started");
@@ -439,8 +457,8 @@ int main(int, char**)
 		const float controlWidth = compactLayout ? workSize.x
 			: std::max(1.0f, workSize.x - fpsPanelWidth);
 		const float controlHeight = compactLayout
-			? std::min(150.0f, std::max(112.0f, workSize.y * 0.20f))
-			: std::min(140.0f, std::max(96.0f, workSize.y * 0.30f));
+			? std::min(210.0f, std::max(170.0f, workSize.y * 0.26f))
+			: std::min(180.0f, std::max(150.0f, workSize.y * 0.30f));
 		const float fpsHeight = compactLayout
 			? std::min(120.0f, std::max(96.0f, workSize.y * 0.16f))
 			: controlHeight;
@@ -504,6 +522,38 @@ int main(int, char**)
 			ImGui::SameLine();
 			ImGui::TextUnformatted(loopback.IsRunning() ? "Capturing" : "Stopped");
 		}
+		auto drawAnimateThemeCheckbox = [&]() {
+			if (ImGui::Checkbox("Animate theme color", &animateThemeColor)) {
+				if (animateThemeColor) movingBarGradient = false;
+				SDL_Log("animated theme color %s", animateThemeColor ? "enabled" : "disabled");
+			}
+		};
+		auto drawMovingGradientCheckbox = [&]() {
+			if (ImGui::Checkbox("Moving bar color gradient", &movingBarGradient)) {
+				if (movingBarGradient) animateThemeColor = false;
+				SDL_Log("moving bar color gradient %s", movingBarGradient ? "enabled" : "disabled");
+			}
+		};
+		if (compactLayout) {
+			ImGui::SetNextItemWidth(-1.0f);
+			if (ImGui::ColorEdit3("Bar color", &barColor.x,
+				ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_NoInputs))
+				SDL_Log("bar color changed to %.2f, %.2f, %.2f", barColor.x, barColor.y, barColor.z);
+			drawAnimateThemeCheckbox();
+			drawMovingGradientCheckbox();
+		}
+		else {
+			// 宽窗口时把颜色选择器和两个选项放在同一行，选项位于右侧。
+			const float effectWidth = 300.0f;
+			ImGui::SetNextItemWidth(std::max(120.0f, controlWidth - effectWidth));
+			if (ImGui::ColorEdit3("Bar color", &barColor.x,
+				ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_NoInputs))
+				SDL_Log("bar color changed to %.2f, %.2f, %.2f", barColor.x, barColor.y, barColor.z);
+			ImGui::SameLine();
+			drawAnimateThemeCheckbox();
+			ImGui::SameLine();
+			drawMovingGradientCheckbox();
+		}
 		if (layoutSizeChanged)
 			SDL_Log("panel Control actual: pos=%.0f,%.0f size=%.0fx%.0f",
 				ImGui::GetWindowPos().x, ImGui::GetWindowPos().y,
@@ -553,11 +603,17 @@ int main(int, char**)
 		// w 是每根柱可用的水平宽度，h 是画布高度；两者单位都是像素。
 		float w = cv.x / BAR_COUNT, h = cv.y;
 		float pad = std::min(1.0f, w * 0.15f);
+		const float animationTime = (float)(SDL_GetTicksNS() / 1000000000.0);
+		const float animationSpeed = 0.08f;
 		DrawLogBackground(d, p0, cv, appLog);
 		for (int i = 0; i < BAR_COUNT; i++) {
-			// 柱越高，红/绿色分量越强；蓝色固定为 1，形成蓝青渐变。
-			ImU32 col = ImGui::ColorConvertFloat4ToU32(
-				ImVec4(0.1f + vis.mag[i] * 0.5f, 0.4f + vis.mag[i] * 0.6f, 1.0f, 1.0f));
+			// 柱高越大，基础色的 HSV 亮度越高。
+			float hueOffset = 0.0f;
+			if (animateThemeColor)
+				hueOffset = animationTime * animationSpeed;
+			else if (movingBarGradient)
+				hueOffset = animationTime * animationSpeed + (float)i / BAR_COUNT;
+			ImU32 col = BarColorForMagnitude(barColor, vis.mag[i], hueOffset);
 			float bh = vis.mag[i] * h * 0.9f;
 			d->AddRectFilled(ImVec2(p0.x + i * w + pad, p0.y + h - bh),
 				ImVec2(p0.x + (i + 1) * w - pad, p0.y + h), col, 2.0f);

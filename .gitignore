@@ -71,3 +71,6 @@ extern/vcpkg/buildtrees/
 extern/vcpkg/packages/
 extern/vcpkg/downloads/
 /.vs
+
+# macOS Things
+.DS_Store
